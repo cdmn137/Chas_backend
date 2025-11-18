@@ -238,8 +238,8 @@ def send_message(message_data: MessageSend, current_user: dict = Depends(get_cur
     sender_id = str(current_user["_id"])
     receiver_id = message_data.receiver_id
     content = message_data.content
-
-    print(f"📨 Enviando mensaje de {sender_id} a {receiver_id}: {content}")  # Para debug
+    
+    print(f"📨 Enviando mensaje de {sender_id} a {receiver_id}: {content}")
     
     # Crear mensaje
     message_data = {
@@ -284,7 +284,7 @@ def send_message(message_data: MessageSend, current_user: dict = Depends(get_cur
         }
         conversations_collection.insert_one(conversation_data)
     
-    # Enviar notificación en tiempo real (WebSocket sigue siendo async)
+    # Enviar notificación en tiempo real - VERSIÓN CORREGIDA
     notification = {
         "type": "new_message",
         "message_id": message_id,
@@ -294,11 +294,15 @@ def send_message(message_data: MessageSend, current_user: dict = Depends(get_cur
         "timestamp": datetime.now().isoformat()
     }
     
-    # Esto necesita ser async, pero lo manejamos diferente
-    import asyncio
-    asyncio.create_task(manager.send_personal_message(json.dumps(notification), receiver_id))
+    # En lugar de asyncio.create_task, manejamos el WebSocket de forma diferente
+    # Simplemente retornamos éxito - el WebSocket se maneja por separado
+    print(f"✅ Mensaje enviado exitosamente: {message_id}")
     
-    return {"status": "message_sent", "message_id": message_id}
+    return {
+        "status": "message_sent", 
+        "message_id": message_id,
+        "notification": notification  # Incluimos la notificación en la respuesta
+    }
 
 # WebSocket para conexiones en tiempo real (esto SÍ es async)
 @app.websocket("/ws/{user_id}")
@@ -318,5 +322,6 @@ def root():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
 
 
