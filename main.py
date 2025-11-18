@@ -14,7 +14,7 @@ app = FastAPI(title="Messaging App API")
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # En producción, especifica tu dominio de Netlify
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -56,7 +56,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 # Dependency para obtener usuario actual
-async def get_current_user(token: str = Depends(security)):
+def get_current_user(token: str = Depends(security)):
     payload = verify_token(token.credentials)
     if not payload:
         raise HTTPException(status_code=401, detail="Token inválido")
@@ -65,7 +65,7 @@ async def get_current_user(token: str = Depends(security)):
     if not user_id:
         raise HTTPException(status_code=401, detail="Token inválido")
     
-    user = await users_collection.find_one({"_id": ObjectId(user_id)})
+    user = users_collection.find_one({"_id": ObjectId(user_id)})
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     
@@ -73,9 +73,9 @@ async def get_current_user(token: str = Depends(security)):
 
 # Auth Routes
 @app.post("/register")
-async def register(user: User):
+def register(user: User):
     # Verificar si usuario o email ya existen
-    existing_user = await users_collection.find_one({
+    existing_user = users_collection.find_one({
         "$or": [
             {"username": user.username},
             {"email": user.email}
@@ -91,7 +91,7 @@ async def register(user: User):
     user_dict["password"] = hashed_password
     
     # Insertar usuario
-    result = await users_collection.insert_one(user_dict)
+    result = users_collection.insert_one(user_dict)
     user_id = str(result.inserted_id)
     
     # Crear token
@@ -110,8 +110,8 @@ async def register(user: User):
     }
 
 @app.post("/login")
-async def login(credentials: UserLogin):
-    user = await users_collection.find_one({"username": credentials.username})
+def login(credentials: UserLogin):
+    user = users_collection.find_one({"username": credentials.username})
     
     if not user or not verify_password(credentials.password, user["password"]):
         raise HTTPException(status_code=401, detail="Credenciales incorrectas")
@@ -132,11 +132,11 @@ async def login(credentials: UserLogin):
 
 # User Routes
 @app.get("/users/search/{username}")
-async def search_users(username: str, current_user: dict = Depends(get_current_user)):
-    users = await users_collection.find({
+def search_users(username: str, current_user: dict = Depends(get_current_user)):
+    users = users_collection.find({
         "username": {"$regex": username, "$options": "i"},
         "_id": {"$ne": ObjectId(current_user["_id"])}
-    }).to_list(length=10)
+    }).limit(10)
     
     return [{
         "id": str(user["_id"]),
@@ -145,11 +145,11 @@ async def search_users(username: str, current_user: dict = Depends(get_current_u
     } for user in users]
 
 @app.get("/users/{user_id}")
-async def get_user(user_id: str, current_user: dict = Depends(get_current_user)):
+def get_user(user_id: str, current_user: dict = Depends(get_current_user)):
     if not ObjectId.is_valid(user_id):
         raise HTTPException(status_code=400, detail="ID de usuario inválido")
     
-    user = await users_collection.find_one({"_id": ObjectId(user_id)})
+    user = users_collection.find_one({"_id": ObjectId(user_id)})
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     
@@ -161,22 +161,22 @@ async def get_user(user_id: str, current_user: dict = Depends(get_current_user))
 
 # Conversation Routes
 @app.get("/conversations")
-async def get_conversations(current_user: dict = Depends(get_current_user)):
+def get_conversations(current_user: dict = Depends(get_current_user)):
     user_id = str(current_user["_id"])
     
     # Buscar conversaciones donde el usuario es participante
-    conversations = await conversations_collection.find({
+    conversations = conversations_collection.find({
         "$or": [
             {"participant1": user_id},
             {"participant2": user_id}
         ]
-    }).sort("last_message_time", -1).to_list(length=50)
+    }).sort("last_message_time", -1).limit(50)
     
     # Obtener información de los contactos
     conversations_with_contacts = []
     for conv in conversations:
         other_user_id = conv["participant2"] if conv["participant1"] == user_id else conv["participant1"]
-        other_user = await users_collection.find_one({"_id": ObjectId(other_user_id)})
+        other_user = users_collection.find_one({"_id": ObjectId(other_user_id)})
         
         conversations_with_contacts.append({
             "conversation_id": str(conv["_id"]),
@@ -194,24 +194,24 @@ async def get_conversations(current_user: dict = Depends(get_current_user)):
 
 # Message Routes
 @app.get("/messages/{other_user_id}")
-async def get_messages(other_user_id: str, current_user: dict = Depends(get_current_user)):
+def get_messages(other_user_id: str, current_user: dict = Depends(get_current_user)):
     user_id = str(current_user["_id"])
     
-    messages = await messages_collection.find({
+    messages = messages_collection.find({
         "$or": [
             {"sender_id": user_id, "receiver_id": other_user_id},
             {"sender_id": other_user_id, "receiver_id": user_id}
         ]
-    }).sort("timestamp", 1).to_list(length=100)
+    }).sort("timestamp", 1).limit(100)
     
     # Marcar mensajes como leídos
-    await messages_collection.update_many(
+    messages_collection.update_many(
         {"sender_id": other_user_id, "receiver_id": user_id, "read": False},
         {"$set": {"read": True}}
     )
     
     # Actualizar contador de no leídos en conversación
-    await conversations_collection.update_one({
+    conversations_collection.update_one({
         "$or": [
             {"participant1": user_id, "participant2": other_user_id},
             {"participant1": other_user_id, "participant2": user_id}
@@ -228,7 +228,7 @@ async def get_messages(other_user_id: str, current_user: dict = Depends(get_curr
     } for msg in messages]
 
 @app.post("/messages/send")
-async def send_message(receiver_id: str, content: str, current_user: dict = Depends(get_current_user)):
+def send_message(receiver_id: str, content: str, current_user: dict = Depends(get_current_user)):
     sender_id = str(current_user["_id"])
     
     # Crear mensaje
@@ -240,11 +240,11 @@ async def send_message(receiver_id: str, content: str, current_user: dict = Depe
         "read": False
     }
     
-    result = await messages_collection.insert_one(message_data)
+    result = messages_collection.insert_one(message_data)
     message_id = str(result.inserted_id)
     
     # Crear o actualizar conversación
-    conversation = await conversations_collection.find_one({
+    conversation = conversations_collection.find_one({
         "$or": [
             {"participant1": sender_id, "participant2": receiver_id},
             {"participant1": receiver_id, "participant2": sender_id}
@@ -253,7 +253,7 @@ async def send_message(receiver_id: str, content: str, current_user: dict = Depe
     
     if conversation:
         # Actualizar conversación existente
-        await conversations_collection.update_one(
+        conversations_collection.update_one(
             {"_id": conversation["_id"]},
             {
                 "$set": {
@@ -272,9 +272,9 @@ async def send_message(receiver_id: str, content: str, current_user: dict = Depe
             "last_message_time": datetime.now(),
             "unread_count": 1
         }
-        await conversations_collection.insert_one(conversation_data)
+        conversations_collection.insert_one(conversation_data)
     
-    # Enviar notificación en tiempo real
+    # Enviar notificación en tiempo real (WebSocket sigue siendo async)
     notification = {
         "type": "new_message",
         "message_id": message_id,
@@ -284,11 +284,13 @@ async def send_message(receiver_id: str, content: str, current_user: dict = Depe
         "timestamp": datetime.now().isoformat()
     }
     
-    await manager.send_personal_message(json.dumps(notification), receiver_id)
+    # Esto necesita ser async, pero lo manejamos diferente
+    import asyncio
+    asyncio.create_task(manager.send_personal_message(json.dumps(notification), receiver_id))
     
     return {"status": "message_sent", "message_id": message_id}
 
-# WebSocket para conexiones en tiempo real
+# WebSocket para conexiones en tiempo real (esto SÍ es async)
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
     await manager.connect(websocket, user_id)
@@ -300,7 +302,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
         manager.disconnect(user_id)
 
 @app.get("/")
-async def root():
+def root():
     return {"message": "Messaging App API"}
 
 if __name__ == "__main__":
