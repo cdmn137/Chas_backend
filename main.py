@@ -170,33 +170,48 @@ def get_user(user_id: str, current_user: dict = Depends(get_current_user)):
 def get_conversations(current_user: dict = Depends(get_current_user)):
     user_id = str(current_user["_id"])
     
-    # Buscar conversaciones donde el usuario es participante
-    conversations = conversations_collection.find({
-        "$or": [
-            {"participant1": user_id},
-            {"participant2": user_id}
-        ]
-    }).sort("last_message_time", -1).limit(50)
-    
-    # Obtener información de los contactos
-    conversations_with_contacts = []
-    for conv in conversations:
-        other_user_id = conv["participant2"] if conv["participant1"] == user_id else conv["participant1"]
-        other_user = users_collection.find_one({"_id": ObjectId(other_user_id)})
+    try:
+        # Buscar conversaciones donde el usuario es participante
+        conversations = list(conversations_collection.find({
+            "$or": [
+                {"participant1": user_id},
+                {"participant2": user_id}
+            ]
+        }).sort("last_message_time", -1).limit(50))
         
-        conversations_with_contacts.append({
-            "conversation_id": str(conv["_id"]),
-            "other_user": {
-                "id": other_user_id,
-                "name": other_user["name"],
-                "username": other_user["username"]
-            },
-            "last_message": conv.get("last_message", ""),
-            "last_message_time": conv.get("last_message_time"),
-            "unread_count": conv.get("unread_count", 0)
-        })
-    
-    return conversations_with_contacts
+        print(f"📞 Encontradas {len(conversations)} conversaciones para usuario {user_id}")
+        
+        # Obtener información de los contactos
+        conversations_with_contacts = []
+        for conv in conversations:
+            other_user_id = conv["participant2"] if conv["participant1"] == user_id else conv["participant1"]
+            
+            try:
+                other_user = users_collection.find_one({"_id": ObjectId(other_user_id)})
+                if other_user:
+                    conversations_with_contacts.append({
+                        "conversation_id": str(conv["_id"]),
+                        "other_user": {
+                            "id": other_user_id,
+                            "name": other_user["name"],
+                            "username": other_user["username"]
+                        },
+                        "last_message": conv.get("last_message", ""),
+                        "last_message_time": conv.get("last_message_time"),
+                        "unread_count": conv.get("unread_count", 0)
+                    })
+                else:
+                    print(f"⚠️ Usuario {other_user_id} no encontrado")
+            except Exception as e:
+                print(f"❌ Error procesando usuario {other_user_id}: {e}")
+                continue
+        
+        print(f"✅ Retornando {len(conversations_with_contacts)} conversaciones procesadas")
+        return conversations_with_contacts
+        
+    except Exception as e:
+        print(f"❌ Error en /conversations: {e}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
 
 # Message Routes
 @app.get("/messages/{other_user_id}")
@@ -322,6 +337,7 @@ def root():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
 
 
 
