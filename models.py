@@ -1,5 +1,5 @@
-from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from pydantic import BaseModel
+from typing import Optional
 from datetime import datetime
 from bson import ObjectId
 
@@ -17,7 +17,7 @@ class PyObjectId(ObjectId):
 class User(BaseModel):
     name: str
     username: str
-    email: EmailStr
+    email: str  # Cambié EmailStr por str
     password: str
     created_at: datetime = datetime.now()
 
