@@ -8,8 +8,14 @@ from bson import ObjectId
 import json
 from datetime import datetime
 from typing import List
+from pydantic import BaseModel
 
 app = FastAPI(title="Messaging App API")
+
+# Agrega este modelo al principio de tu main.py
+class MessageSend(BaseModel):
+    receiver_id: str
+    content: str
 
 # CORS
 app.add_middleware(
@@ -228,8 +234,10 @@ def get_messages(other_user_id: str, current_user: dict = Depends(get_current_us
     } for msg in messages]
 
 @app.post("/messages/send")
-def send_message(receiver_id: str, content: str, current_user: dict = Depends(get_current_user)):
+def send_message(message_data: MessageSend, current_user: dict = Depends(get_current_user)):
     sender_id = str(current_user["_id"])
+    receiver_id = message_data.receiver_id
+    content = message_data.content
     
     # Crear mensaje
     message_data = {
@@ -308,3 +316,4 @@ def root():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
