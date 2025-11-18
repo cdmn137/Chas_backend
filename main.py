@@ -171,20 +171,25 @@ def get_conversations(current_user: dict = Depends(get_current_user)):
     user_id = str(current_user["_id"])
     
     try:
+        print(f"🔄 Buscando conversaciones para usuario: {user_id}")
+        
         # Buscar conversaciones donde el usuario es participante
-        conversations = list(conversations_collection.find({
+        conversations_cursor = conversations_collection.find({
             "$or": [
                 {"participant1": user_id},
                 {"participant2": user_id}
             ]
-        }).sort("last_message_time", -1).limit(50))
+        }).sort("last_message_time", -1)
         
-        print(f"📞 Encontradas {len(conversations)} conversaciones para usuario {user_id}")
+        conversations = list(conversations_cursor)
+        print(f"📞 Encontradas {len(conversations)} conversaciones en DB")
         
         # Obtener información de los contactos
         conversations_with_contacts = []
         for conv in conversations:
             other_user_id = conv["participant2"] if conv["participant1"] == user_id else conv["participant1"]
+            
+            print(f"   🔍 Procesando conversación con usuario: {other_user_id}")
             
             try:
                 other_user = users_collection.find_one({"_id": ObjectId(other_user_id)})
@@ -196,14 +201,15 @@ def get_conversations(current_user: dict = Depends(get_current_user)):
                             "name": other_user["name"],
                             "username": other_user["username"]
                         },
-                        "last_message": conv.get("last_message", ""),
+                        "last_message": conv.get("last_message", "Sin mensajes"),
                         "last_message_time": conv.get("last_message_time"),
                         "unread_count": conv.get("unread_count", 0)
                     })
+                    print(f"   ✅ Añadida conversación con: {other_user['name']}")
                 else:
-                    print(f"⚠️ Usuario {other_user_id} no encontrado")
+                    print(f"   ⚠️ Usuario {other_user_id} no encontrado en DB")
             except Exception as e:
-                print(f"❌ Error procesando usuario {other_user_id}: {e}")
+                print(f"   ❌ Error procesando usuario {other_user_id}: {e}")
                 continue
         
         print(f"✅ Retornando {len(conversations_with_contacts)} conversaciones procesadas")
@@ -211,6 +217,8 @@ def get_conversations(current_user: dict = Depends(get_current_user)):
         
     except Exception as e:
         print(f"❌ Error en /conversations: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail="Error interno del servidor")
 
 # Message Routes
@@ -257,7 +265,7 @@ def send_message(message_data: MessageSend, current_user: dict = Depends(get_cur
     print(f"📨 Enviando mensaje de {sender_id} a {receiver_id}: {content}")
     
     # Crear mensaje
-    message_data = {
+    message_doc = {
         "sender_id": sender_id,
         "receiver_id": receiver_id,
         "content": content,
@@ -265,59 +273,71 @@ def send_message(message_data: MessageSend, current_user: dict = Depends(get_cur
         "read": False
     }
     
-    result = messages_collection.insert_one(message_data)
+    result = messages_collection.insert_one(message_doc)
     message_id = str(result.inserted_id)
     
-    # Crear o actualizar conversación
-    conversation = conversations_collection.find_one({
+    # DEBUG: Verificar si existe conversación ANTES
+    existing_conv = conversations_collection.find_one({
         "$or": [
             {"participant1": sender_id, "participant2": receiver_id},
             {"participant1": receiver_id, "participant2": sender_id}
         ]
     })
+    print(f"🔍 Conversación existente: {existing_conv}")
     
-    if conversation:
-        # Actualizar conversación existente
-        conversations_collection.update_one(
-            {"_id": conversation["_id"]},
-            {
-                "$set": {
-                    "last_message": content,
-                    "last_message_time": datetime.now()
-                },
-                "$inc": {"unread_count": 1}
-            }
-        )
-    else:
-        # Crear nueva conversación
-        conversation_data = {
-            "participant1": sender_id,
-            "participant2": receiver_id,
-            "last_message": content,
-            "last_message_time": datetime.now(),
-            "unread_count": 1
-        }
-        conversations_collection.insert_one(conversation_data)
-    
-    # Enviar notificación en tiempo real - VERSIÓN CORREGIDA
-    notification = {
-        "type": "new_message",
-        "message_id": message_id,
-        "sender_id": sender_id,
-        "sender_name": current_user["name"],
-        "content": content,
-        "timestamp": datetime.now().isoformat()
+    # Crear o actualizar conversación - VERSIÓN MEJORADA
+    conversation_filter = {
+        "$or": [
+            {"participant1": sender_id, "participant2": receiver_id},
+            {"participant1": receiver_id, "participant2": sender_id}
+        ]
     }
     
-    # En lugar de asyncio.create_task, manejamos el WebSocket de forma diferente
-    # Simplemente retornamos éxito - el WebSocket se maneja por separado
-    print(f"✅ Mensaje enviado exitosamente: {message_id}")
+    conversation_update = {
+        "$set": {
+            "last_message": content,
+            "last_message_time": datetime.now()
+        },
+        "$inc": {"unread_count": 1}
+    }
+    
+    # Usar upsert para crear si no existe
+    result = conversations_collection.update_one(
+        conversation_filter,
+        conversation_update,
+        upsert=True  # ¡IMPORTANTE! Crea si no existe
+    )
+    
+    print(f"✅ Conversación actualizada: matched={result.matched_count}, modified={result.modified_count}, upserted_id={result.upserted_id}")
+    
+    # Verificar la conversación después de actualizar
+    updated_conv = conversations_collection.find_one(conversation_filter)
+    print(f"🔍 Conversación después de update: {updated_conv}")
     
     return {
         "status": "message_sent", 
         "message_id": message_id,
-        "notification": notification  # Incluimos la notificación en la respuesta
+        "conversation_updated": True
     }
+    
+@app.get("/debug/conversations/{user_id}")
+def debug_conversations(user_id: str):
+    """Endpoint para debug - ver todas las conversaciones de un usuario"""
+    try:
+        conversations = list(conversations_collection.find({
+            "$or": [
+                {"participant1": user_id},
+                {"participant2": user_id}
+            ]
+        }))
+        
+        print(f"🔍 DEBUG Conversaciones para {user_id}:")
+        for conv in conversations:
+            print(f"   - {conv}")
+        
+        return {"conversations": conversations}
+    except Exception as e:
+        return {"error": str(e)}
 
 # WebSocket para conexiones en tiempo real (esto SÍ es async)
 @app.websocket("/ws/{user_id}")
@@ -337,6 +357,7 @@ def root():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
 
 
 
